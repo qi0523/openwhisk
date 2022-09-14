@@ -232,6 +232,10 @@ object ConfigKeys {
 
   val docker = "whisk.docker"
   val dockerClient = s"$docker.client"
+  val imageClient = s"$docker.image-client"
+  val diskPath = "whisk.disk-path"
+  val imageGCConfig = "whisk.image-gc"
+  val p2pPort = ":30000"
   val dockerContainerFactory = s"$docker.container-factory"
   val standaloneDockerContainerFactory = s"$docker.standalone.container-factory"
   val runc = "whisk.runc"

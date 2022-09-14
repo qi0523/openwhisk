@@ -35,6 +35,7 @@ import scala.util.Try
  * @param dedicatedNamespaces only dedicatedNamespaces's actions can be run on this invoker
  */
 case class InvokerInstanceId(val instance: Int,
+                             val hostIp: String,  //invoker host ip
                              uniqueName: Option[String] = None,
                              displayedName: Option[String] = None,
                              val userMemory: ByteSize,
@@ -43,6 +44,8 @@ case class InvokerInstanceId(val instance: Int,
                              val dedicatedNamespaces: Seq[String] = Seq.empty)
     extends InstanceId {
   def toInt: Int = instance
+
+  def getHostIp: String = hostIp
 
   override val instanceType = "invoker"
 
@@ -82,6 +85,7 @@ object InvokerInstanceId extends DefaultJsonProtocol {
     override def write(i: InvokerInstanceId): JsValue = {
       val fields = new ListBuffer[(String, JsValue)]
       fields ++= List("instance" -> JsNumber(i.instance))
+      fields ++= List("hostIp" -> JsString(i.hostIp))
       fields ++= List("userMemory" -> JsString(i.userMemory.toString))
       i.busyMemory.foreach { busyMemory =>
         fields ++= List("busyMemory" -> JsString(busyMemory.toString))
@@ -96,6 +100,7 @@ object InvokerInstanceId extends DefaultJsonProtocol {
 
     override def read(json: JsValue): InvokerInstanceId = {
       val instance = fromField[Int](json, "instance")
+      val hostIp = fromField[String](json,"hostIp")
       val uniqueName = fromField[Option[String]](json, "uniqueName")
       val displayedName = fromField[Option[String]](json, "displayedName")
       val userMemory = fromField[String](json, "userMemory")
@@ -107,6 +112,7 @@ object InvokerInstanceId extends DefaultJsonProtocol {
       if (instanceType == "invoker") {
         new InvokerInstanceId(
           instance,
+          hostIp,
           uniqueName,
           displayedName,
           ByteSize.fromString(userMemory),

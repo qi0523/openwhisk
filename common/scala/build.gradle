@@ -76,7 +76,7 @@ dependencies {
 
     // for etcd
     compile("com.ibm.etcd:etcd-java:0.0.13")
-
+    // https://maven.aliyun.com/nexus/content/repositories/central/io/grpc/grpc-core/maven-metadata.xml.
     //tracing support
     compile "io.opentracing:opentracing-api:0.31.0"
     compile "io.opentracing:opentracing-util:0.31.0"

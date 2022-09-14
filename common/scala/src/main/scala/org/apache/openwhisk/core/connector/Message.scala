@@ -527,7 +527,8 @@ case class ContainerCreationMessage(override val transid: TransactionId,
                                     schedulerHost: String,
                                     rpcPort: Int,
                                     retryCount: Int = 0,
-                                    creationId: CreationId = CreationId.generate())
+                                    creationId: CreationId = CreationId.generate(),
+                                    var srcIP: String = "")
     extends ContainerMessage(transid) {
 
   override def toJson: JsValue = ContainerCreationMessage.serdes.write(this)
@@ -541,7 +542,7 @@ object ContainerCreationMessage extends DefaultJsonProtocol {
   private implicit val fqnSerdes = FullyQualifiedEntityName.serdes
   private implicit val instanceIdSerdes = SchedulerInstanceId.serdes
   private implicit val byteSizeSerdes = size.serdes
-  implicit val serdes = jsonFormat10(
+  implicit val serdes = jsonFormat11(
     ContainerCreationMessage.apply(
       _: TransactionId,
       _: String,
@@ -552,7 +553,27 @@ object ContainerCreationMessage extends DefaultJsonProtocol {
       _: String,
       _: Int,
       _: Int,
-      _: CreationId))
+      _: CreationId,
+      _: String))
+}
+
+case class InvokerGCMessage(actionName: String, kind: String, invokerIP: String) extends Message {
+  /**
+   * Serializes message to string. Must be idempotent.
+   */
+
+  override def serialize: String = InvokerGCMessage.serdes.write(this).compactPrint
+}
+
+object InvokerGCMessage extends DefaultJsonProtocol {
+  def parse(msg: String): Try[InvokerGCMessage] = Try(serdes.read(msg.parseJson))
+
+  implicit val serdes = jsonFormat3(
+    InvokerGCMessage.apply(
+      _: String,
+      _: String,
+      _: String))
+
 }
 
 case class ContainerDeletionMessage(override val transid: TransactionId,

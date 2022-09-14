@@ -229,12 +229,12 @@ object EtcdKV {
     def getInstanceId(invokerKey: String): InvokerInstanceId = {
       val constructs = invokerKey.split("\\b/+")
       constructs match {
-        case Array(_, _, id, uniqueName, displayName) =>
-          InvokerInstanceId(getId(id), Some(uniqueName), Some(displayName), 0.B)
-        case Array(_, _, id, uniqueName) =>
-          InvokerInstanceId(getId(id), Some(uniqueName), userMemory = 0.B)
-        case Array(_, _, id) =>
-          InvokerInstanceId(getId(id), userMemory = 0.B)
+        case Array(_, _, id, hostIp, uniqueName, displayName) =>
+          InvokerInstanceId(getId(id), hostIp, Some(uniqueName), Some(displayName), 0.B)
+        case Array(_, _, id, hostIp, uniqueName) =>
+          InvokerInstanceId(getId(id), hostIp, Some(uniqueName), userMemory = 0.B)
+        case Array(_, _, id, hostIp) =>
+          InvokerInstanceId(getId(id), hostIp, userMemory = 0.B)
       }
     }
   }

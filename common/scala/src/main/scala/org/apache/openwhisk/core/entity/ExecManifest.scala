@@ -176,7 +176,7 @@ protected[core] object ExecManifest {
    * "prefix/name[:tag]" e.g., "openwhisk/python3action:latest".
    */
   protected[core] case class ImageName(name: String,
-                                       registry: Option[String] = None,
+                                       var registry: Option[String] = None,
                                        prefix: Option[String] = None,
                                        tag: Option[String] = None) {
 
@@ -193,6 +193,12 @@ protected[core] object ExecManifest {
       val p = prefix.filter(_.nonEmpty).map(_ + "/").getOrElse("")
       val t = tag.filter(_.nonEmpty).map(":" + _).getOrElse("")
       r + p + name + t
+    }
+
+    def resolveImageNameWithoutRegistry(): String = {
+      val p = prefix.filter(_.nonEmpty).map(_ + "/").getOrElse("")
+      val t = tag.filter(_.nonEmpty).map(":" + _).getOrElse("")
+      p + name + t
     }
 
     /**
