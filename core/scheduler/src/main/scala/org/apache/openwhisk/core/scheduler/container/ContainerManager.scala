@@ -22,45 +22,20 @@ import akka.actor.{Actor, ActorRef, ActorRefFactory, ActorSystem, Props}
 import akka.event.Logging.InfoLevel
 import org.apache.openwhisk.common.InvokerState.{Healthy, Offline, Unhealthy}
 import org.apache.openwhisk.common.{GracefulShutdown, InvokerHealth, Logging, LoggingMarkers, TransactionId}
-import org.apache.openwhisk.core.connector.ContainerCreationError.{
-  NoAvailableInvokersError,
-  NoAvailableResourceInvokersError
-}
+import org.apache.openwhisk.core.connector.ContainerCreationError.{NoAvailableInvokersError, NoAvailableResourceInvokersError}
 import org.apache.openwhisk.core.connector._
 import org.apache.openwhisk.core.entity.size._
-import org.apache.openwhisk.core.entity.{
-  Annotations,
-  ByteSize,
-  DocRevision,
-  FullyQualifiedEntityName,
-  InvokerInstanceId,
-  MemoryLimit,
-  SchedulerInstanceId
-}
+import org.apache.openwhisk.core.entity.{Annotations, ByteSize, DocRevision, FullyQualifiedEntityName, InvokerInstanceId, MemoryLimit, SchedulerInstanceId, WhiskActionMetaData}
 import org.apache.openwhisk.core.etcd.EtcdClient
 import org.apache.openwhisk.core.etcd.EtcdKV.ContainerKeys.containerPrefix
 import org.apache.openwhisk.core.etcd.EtcdKV.{ContainerKeys, InvokerKeys}
 import org.apache.openwhisk.core.etcd.EtcdType._
 import org.apache.openwhisk.core.scheduler.Scheduler
-import org.apache.openwhisk.core.scheduler.message.{
-  ContainerCreation,
-  ContainerDeletion,
-  ContainerKeyMeta,
-  CreationJobState,
-  FailedCreationJob,
-  RegisterCreationJob,
-  ReschedulingCreationJob,
-  SuccessfulCreationJob
-}
+import org.apache.openwhisk.core.scheduler.message.{ContainerCreation, ContainerDeletion, ContainerKeyMeta, CreationJobState, FailedCreationJob, RegisterCreationJob, ReschedulingCreationJob, SuccessfulCreationJob}
+import org.apache.openwhisk.core.scheduler.p2p.P2PManager
+import org.apache.openwhisk.core.scheduler.p2p.ft.FTManager
 import org.apache.openwhisk.core.scheduler.queue.{MemoryQueueKey, QueuePool}
-import org.apache.openwhisk.core.service.{
-  DeleteEvent,
-  PutEvent,
-  UnwatchEndpoint,
-  WatchEndpoint,
-  WatchEndpointInserted,
-  WatchEndpointRemoved
-}
+import org.apache.openwhisk.core.service.{DeleteEvent, PutEvent, UnwatchEndpoint, WatchEndpoint, WatchEndpointInserted, WatchEndpointRemoved}
 import org.apache.openwhisk.core.{ConfigKeys, WarmUp, WhiskConfig}
 import pureconfig.generic.auto._
 import pureconfig.loadConfigOrThrow
@@ -80,7 +55,8 @@ class ContainerManager(jobManagerFactory: ActorRefFactory => ActorRef,
                        schedulerInstanceId: SchedulerInstanceId,
                        etcdClient: EtcdClient,
                        config: WhiskConfig,
-                       watcherService: ActorRef)(implicit actorSystem: ActorSystem, logging: Logging)
+                       watcherService: ActorRef,
+                       p2PManager: P2PManager)(implicit actorSystem: ActorSystem, logging: Logging)
     extends Actor {
   private implicit val ec: ExecutionContextExecutor = context.dispatcher
 
@@ -103,7 +79,7 @@ class ContainerManager(jobManagerFactory: ActorRefFactory => ActorRef,
 
   override def receive: Receive = {
     case ContainerCreation(msgs, memory, invocationNamespace) =>
-      createContainer(msgs, memory, invocationNamespace)
+      createContainer(msgs, memory, invocationNamespace) // 容器创建
 
     case ContainerDeletion(invocationNamespace, fqn, revision, whiskActionMetaData) =>
       getInvokersWithOldContainer(invocationNamespace, fqn, revision)
@@ -119,6 +95,7 @@ class ContainerManager(jobManagerFactory: ActorRefFactory => ActorRef,
 
     case rescheduling: ReschedulingCreationJob =>
       val msg = rescheduling.toCreationMessage(schedulerInstanceId, rescheduling.retry + 1)
+      deletePeer(rescheduling.action, rescheduling.actionMetaData, rescheduling.hostIP)
       createContainer(
         List(msg),
         rescheduling.actionMetaData.limits.memory.megabytes.MB,
@@ -143,7 +120,10 @@ class ContainerManager(jobManagerFactory: ActorRefFactory => ActorRef,
           warmedInvokers.remove(invoker.instance)
       }
 
-    case FailedCreationJob(cid, _, _, _, _, _) =>
+    case FailedCreationJob(cid, _, action, _, _, _, actionMetaData, hostIP) =>
+      if (hostIP != "" && p2PManager != null) {
+        deletePeer(action, actionMetaData, hostIP)
+      }
       inProgressWarmedContainers.remove(cid.asString)
 
     case SuccessfulCreationJob(cid, _, _, _) =>
@@ -157,6 +137,7 @@ class ContainerManager(jobManagerFactory: ActorRefFactory => ActorRef,
     case _ =>
   }
 
+  // createContainer
   private def createContainer(msgs: List[ContainerCreationMessage],
                               memory: ByteSize,
                               invocationNamespace: String): Unit = {
@@ -179,21 +160,45 @@ class ContainerManager(jobManagerFactory: ActorRefFactory => ActorRef,
             }
             Future.failed(NoCapacityException("No available invokers."))
           } else {
-            coldCreations.foreach { msg =>
-              creationJobManager ! RegisterCreationJob(msg)
-            }
-
             Future {
               ContainerManager
                 .schedule(invokers, coldCreations, memory)
                 .map { pair =>
-                  sendCreationContainerToInvoker(messagingProducer, pair.invokerId.toInt, pair.msg)
+                  logging.debug(this, s"InvokerInstanceId: ${pair.invokerId.toInt}, uniqueName: ${pair.invokerId.uniqueName}, displayedName: ${pair.invokerId.displayedName}")
+                  // function tree or double linked list
+                  // pair.invokerId.getHostIp
+                  // kind: python, nodejs,
+                  if (p2PManager != null) {
+                    convertMsg(pair.msg, pair.invokerId.hostIp)
+                  }
+                  creationJobManager ! RegisterCreationJob(pair.msg, pair.invokerId.hostIp)
+                  sendCreationContainerToInvoker(messagingProducer, pair.invokerId.toInt, pair.msg) // do not need to pull image
                 }
             }
           }.andThen {
             case Failure(t) => logging.warn(this, s"Failed to create container caused by: $t")
           }
         }
+  }
+
+  private def convertMsg(msg: ContainerCreationMessage, hostIp: String): Unit = {
+    if (this.p2PManager.isInstanceOf[FTManager]){
+      msg.srcIP = p2PManager.getSrcNode(msg.action.name.toString, hostIp)
+    } else if (msg.whiskActionMetaData.exec.kind == "blackbox") { // custom container, 使用容器名
+      msg.srcIP = p2PManager.getSrcNode(msg.action.name.toString, hostIp)
+    } else {
+      msg.srcIP = p2PManager.getSrcNode(msg.whiskActionMetaData.exec.kind, hostIp)
+    }
+  }
+
+  private def deletePeer(action: FullyQualifiedEntityName, actionMetaData: WhiskActionMetaData, hostIp: String): Unit = {
+    if (this.p2PManager.isInstanceOf[FTManager]){
+      p2PManager.deletePeer(action.name.toString, hostIp)
+    } else if (actionMetaData.exec.kind == "blackbox") { // custom container, 使用容器名
+      p2PManager.deletePeer(action.name.toString, hostIp)
+    } else {
+      p2PManager.deletePeer(actionMetaData.exec.kind, hostIp)
+    }
   }
 
   private def getInvokersWithOldContainer(invocationNamespace: String,
@@ -281,6 +286,8 @@ class ContainerManager(jobManagerFactory: ActorRefFactory => ActorRef,
     val topic = s"${Scheduler.topicPrefix}invoker$invoker"
     val start = transid.started(this, LoggingMarkers.SCHEDULER_KAFKA, s"posting to $topic")
 
+    // warm msgs and cold msgs
+    logging.debug(this,s"sendCreationContainerToInvoker: invokerid### $invoker")
     producer.send(topic, msg).andThen {
       case Success(status) =>
         transid.finished(
@@ -351,8 +358,9 @@ object ContainerManager {
             schedulerInstanceId: SchedulerInstanceId,
             etcdClient: EtcdClient,
             config: WhiskConfig,
-            watcherService: ActorRef)(implicit actorSystem: ActorSystem, logging: Logging): Props =
-    Props(new ContainerManager(jobManagerFactory, provider, schedulerInstanceId, etcdClient, config, watcherService))
+            watcherService: ActorRef,
+            p2PManager: P2PManager)(implicit actorSystem: ActorSystem, logging: Logging): Props =
+    Props(new ContainerManager(jobManagerFactory, provider, schedulerInstanceId, etcdClient, config, watcherService, p2PManager))
 
   /**
    * The rng algorithm is responsible for the invoker distribution, and the better the distribution, the smaller the number of rescheduling.
@@ -521,9 +529,10 @@ object ContainerManager {
 
                 InvokerHealth(invoker, status)
               }
-              .getOrElse(InvokerHealth(InvokerInstanceId(kv.getKey, userMemory = 0.MB), Offline))
+              .getOrElse(InvokerHealth(InvokerInstanceId(kv.getKey, "", userMemory = 0.MB), Offline))
           }
           .filter(i => i.status.isUsable)
+          .filter(_.id.hostIp != "")
           .filter(_.id.userMemory >= minMemory)
           .filter { invoker =>
             invoker.id.dedicatedNamespaces.isEmpty || invoker.id.dedicatedNamespaces.contains(invocationNamespace)
@@ -556,9 +565,10 @@ object ContainerManager {
                   dedicatedNamespaces = resourceMessage.dedicatedNamespaces)
                 InvokerHealth(invoker, status)
               }
-              .getOrElse(InvokerHealth(InvokerInstanceId(kv.getKey, userMemory = 0.MB), Offline))
+              .getOrElse(InvokerHealth(InvokerInstanceId(kv.getKey, "", userMemory = 0.MB), Offline))
           }
           .filter(i => i.status.isUsable)
+          .filter(_.id.hostIp != "")
           .filter(_.id.userMemory >= minMemory)
           .toList
       }

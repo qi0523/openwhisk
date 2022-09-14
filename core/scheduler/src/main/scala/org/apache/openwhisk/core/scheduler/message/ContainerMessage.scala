@@ -41,7 +41,7 @@ case class ContainerDeletion(invocationNamespace: String,
                              whiskActionMetaData: WhiskActionMetaData)
 
 sealed trait CreationJob
-case class RegisterCreationJob(msg: ContainerCreationMessage) extends CreationJob
+case class RegisterCreationJob(msg: ContainerCreationMessage, hostIP: String = "") extends CreationJob
 case class FinishCreationJob(ack: ContainerCreationAckMessage) extends CreationJob
 case class ReschedulingCreationJob(tid: TransactionId,
                                    creationId: CreationId,
@@ -51,7 +51,8 @@ case class ReschedulingCreationJob(tid: TransactionId,
                                    actionMetaData: WhiskActionMetaData,
                                    schedulerHost: String,
                                    rpcPort: Int,
-                                   retry: Int)
+                                   retry: Int,
+                                   hostIP: String)
     extends CreationJob {
 
   def toCreationMessage(sid: SchedulerInstanceId, retryCount: Int): ContainerCreationMessage =
@@ -77,7 +78,9 @@ case class FailedCreationJob(override val creationId: CreationId,
                              override val action: FullyQualifiedEntityName,
                              override val revision: DocRevision,
                              error: ContainerCreationError,
-                             message: String)
+                             message: String,
+                             actionMetaData: WhiskActionMetaData = null,
+                             hostIP: String = "")
     extends CreationJobState(creationId, invocationNamespace, action, revision)
 case class SuccessfulCreationJob(override val creationId: CreationId,
                                  override val invocationNamespace: String,

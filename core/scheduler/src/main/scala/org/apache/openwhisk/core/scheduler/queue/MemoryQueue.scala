@@ -246,7 +246,7 @@ class MemoryQueue(private val etcdClient: EtcdClient,
         stay
       }
 
-    case Event(FailedCreationJob(creationId, _, _, _, error, message), RunningData(schedulerActor, droppingActor)) =>
+    case Event(FailedCreationJob(creationId, _, _, _, error, message, _, _), RunningData(schedulerActor, droppingActor)) =>
       creationIds -= creationId.asString
       // when there is no container, it moves to the Flushing state as no activations can be invoked
       if (containers.size <= 0) {
@@ -323,7 +323,7 @@ class MemoryQueue(private val etcdClient: EtcdClient,
       goto(Running) using RunningData(schedulerActor, droppingActor)
 
     // log the failed information
-    case Event(FailedCreationJob(creationId, _, _, _, _, message), data: FlushingData) =>
+    case Event(FailedCreationJob(creationId, _, _, _, _, message, _, _), data: FlushingData) =>
       creationIds -= creationId.asString
       logging.info(
         this,
@@ -474,7 +474,7 @@ class MemoryQueue(private val etcdClient: EtcdClient,
       stay()
 
     // for other cases
-    case Event(FailedCreationJob(creationId, invocationNamespace, action, revision, _, message), _) =>
+    case Event(FailedCreationJob(creationId, invocationNamespace, action, revision, _, message, _, _), _) =>
       creationIds -= creationId.asString
       logging.info(
         this,
@@ -558,6 +558,7 @@ class MemoryQueue(private val etcdClient: EtcdClient,
 
       stay
 
+      // queue 创建容器
     case Event(msg: DecisionResults, _) =>
       val DecisionResults(result, num) = msg
       result match {
@@ -775,7 +776,7 @@ class MemoryQueue(private val etcdClient: EtcdClient,
         generateFallbackActivation(activation, ActivationResponse.developerError(message))
 
     // TODO change scheduler instance id
-    val instance = InvokerInstanceId(0, userMemory = 0.MB)
+    val instance = InvokerInstanceId(0, "", userMemory = 0.MB)
 
     val ackMsg = if (activation.blocking) {
       CombinedCompletionAndResultMessage(activation.transid, activationResponse, instance)

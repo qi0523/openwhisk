@@ -63,9 +63,9 @@ class CreationJobManager(feedFactory: (ActorRefFactory, String, String, Int, Arr
 
   override def receive: Receive = {
     case RegisterCreationJob(
-        ContainerCreationMessage(_, invocationNamespace, action, revision, actionMetaData, _, _, _, _, creationId)) =>
+        ContainerCreationMessage(_, invocationNamespace, action, revision, actionMetaData, _, _, _, _, creationId,_), hostIP) =>
       val isBlackboxInvocation = actionMetaData.toExecutableWhiskAction.exists(a => a.exec.pull)
-      registerJob(invocationNamespace, action, revision, creationId, isBlackboxInvocation)
+      registerJob(invocationNamespace, action, revision, creationId, isBlackboxInvocation, actionMetaData, hostIP)
 
     case FinishCreationJob(
         ContainerCreationAckMessage(
@@ -75,7 +75,7 @@ class CreationJobManager(feedFactory: (ActorRefFactory, String, String, Int, Arr
           action,
           revision,
           actionMetaData,
-          _,
+          rootInvokerIndex,
           schedulerHost,
           rpcPort,
           retryCount,
@@ -103,7 +103,7 @@ class CreationJobManager(feedFactory: (ActorRefFactory, String, String, Int, Arr
             action,
             revision,
             creationId,
-            FailedCreationJob(creationId, invocationNamespace, action, revision, error.get, cause))
+            FailedCreationJob(creationId, invocationNamespace, action, revision, error.get, cause, actionMetaData, rootInvokerIndex.hostIp))
         } else {
           // Reschedule
           logging.error(
@@ -121,7 +121,8 @@ class CreationJobManager(feedFactory: (ActorRefFactory, String, String, Int, Arr
               actionMetaData,
               schedulerHost,
               rpcPort,
-              retryCount)
+              retryCount,
+              rootInvokerIndex.hostIp)
           }
         }
       }
@@ -134,11 +135,13 @@ class CreationJobManager(feedFactory: (ActorRefFactory, String, String, Int, Arr
                           action: FullyQualifiedEntityName,
                           revision: DocRevision,
                           creationId: CreationId,
-                          isBlackboxInvocation: Boolean) = {
+                          isBlackboxInvocation: Boolean,
+                          actionMetaData: WhiskActionMetaData,
+                          hostIP: String) = {
     creationJobPool getOrElseUpdate (creationId, {
       val key = inProgressContainer(invocationNamespace, action, revision, schedulerInstanceId, creationId)
       dataManagementService ! RegisterData(key, "", failoverEnabled = false)
-      JobEntry(action, createTimer(invocationNamespace, action, revision, creationId, isBlackboxInvocation))
+      JobEntry(action, createTimer(invocationNamespace, action, revision, creationId, isBlackboxInvocation, actionMetaData, hostIP))
     })
   }
 
@@ -175,7 +178,9 @@ class CreationJobManager(feedFactory: (ActorRefFactory, String, String, Int, Arr
                             action: FullyQualifiedEntityName,
                             revision: DocRevision,
                             creationId: CreationId,
-                            isBlackbox: Boolean): Cancellable = {
+                            isBlackbox: Boolean,
+                            actionMetaData: WhiskActionMetaData,
+                            hostIP: String): Cancellable = {
     val timeout = if (isBlackbox) FiniteDuration(baseTimeout.toSeconds * 3, TimeUnit.SECONDS) else baseTimeout
     actorSystem.scheduler.scheduleOnce(timeout) {
       logging.warn(
@@ -190,7 +195,7 @@ class CreationJobManager(feedFactory: (ActorRefFactory, String, String, Int, Arr
             action,
             revision,
             ContainerCreationError.TimeoutError,
-            s"[$action] timeout waiting for the ack of $creationId after $timeout")))
+            s"[$action] timeout waiting for the ack of $creationId after $timeout", actionMetaData, hostIP)))
       dataManagementService ! UnregisterData(
         inProgressContainer(invocationNamespace, action, revision, schedulerInstanceId, creationId))
     }

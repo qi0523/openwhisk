@@ -37,6 +37,7 @@ import org.apache.openwhisk.core.etcd.EtcdType.ByteStringToString
 import org.apache.openwhisk.core.etcd.{EtcdClient, EtcdConfig}
 import org.apache.openwhisk.core.scheduler.container.{ContainerManager, CreationJobManager}
 import org.apache.openwhisk.core.scheduler.grpc.ActivationServiceImpl
+import org.apache.openwhisk.core.scheduler.p2p.P2PManagerProvider
 import org.apache.openwhisk.core.scheduler.queue._
 import org.apache.openwhisk.core.service.{DataManagementService, EtcdWorker, LeaseKeepAliveService, WatcherService}
 import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
@@ -60,6 +61,8 @@ class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerE
     extends SchedulerCore {
   implicit val ec = actorSystem.dispatcher
   private val authStore = WhiskAuthStore.datastore()
+
+  val p2pManager = SpiLoader.get[P2PManagerProvider].instance()
 
   val msgProvider = SpiLoader.get[MessagingProvider]
   val producer = msgProvider.getProducer(config, Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT))
@@ -136,6 +139,7 @@ class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerE
     logging.info(this, s"Gracefully shutting down the scheduler")
     containerManager ! GracefulShutdown
     queueManager ! GracefulShutdown
+    if (!imageGCMessageConsumer.isEmpty) imageGCMessageConsumer.get.close()
   }
 
   private def getUserLimit(invocationNamespace: String): Future[Int] = {
@@ -183,7 +187,11 @@ class Scheduler(schedulerId: SchedulerInstanceId, schedulerEndpoints: SchedulerE
    */
   val containerManager: ActorRef =
     actorSystem.actorOf(
-      ContainerManager.props(creationJobManagerFactory, msgProvider, schedulerId, etcdClient, config, watcherService))
+      ContainerManager.props(creationJobManagerFactory, msgProvider, schedulerId, etcdClient, config, watcherService, p2pManager))
+
+  private val imageGCMessageConsumer: Option[ImageGCMessageConsumer] = Some(
+    new ImageGCMessageConsumer(p2pManager, schedulerId, config, msgProvider)
+  )
 
   /**
    * This is a factory to create memory queues.
@@ -323,10 +331,8 @@ object Scheduler {
 
     Seq(
       (topicPrefix + "scheduler" + instanceId.asString, "scheduler", Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT)),
-      (
-        topicPrefix + "creationAck" + instanceId.asString,
-        "creationAck",
-        Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT)))
+      (topicPrefix + "creationAck" + instanceId.asString, "creationAck", Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT)),
+      (topicPrefix + "invokerGCImage" + instanceId.asString, "invokerGCImage", Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT))) //TODO:
       .foreach {
         case (topic, topicConfigurationKey, maxMessageBytes) =>
           if (msgProvider.ensureTopic(config, topic, topicConfigurationKey, maxMessageBytes).isFailure) {
