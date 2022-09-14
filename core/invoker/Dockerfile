@@ -18,8 +18,8 @@
 FROM scala
 
 ENV UID=1001 \
-    NOT_ROOT_USER=owuser \
-    DOCKER_VERSION=18.06.3-ce
+    NOT_ROOT_USER=owuser
+    #DOCKER_VERSION=18.06.3-ce
 # If you change the docker version here, it has implications on invoker runc support.
 # Docker server version and the invoker docker version must be the same to enable runc usage.
 # If this cannot be guaranteed, set `invoker_use_runc: false` in the ansible env.
@@ -27,14 +27,19 @@ ENV UID=1001 \
 
 RUN apk add --update openssl
 
+# Install containerd client: nerdctl
+RUN curl -sSL -o https://github.com/containerd/nerdctl/releases/download/v0.22.2/nerdctl-0.22.2-linux-amd64.tar.gz && \
+    tar --strip-components 1 -xvzf nerdctl-0.22.2-linux-amd64.tar.gz -C /usr/local/bin nerdctl && \
+    rm -f nerdctl-0.22.2-linux-amd64.tar.gz && \
+    chmod +x /usr/local/bin/nerdctl
 # Uncomment to fetch latest version of docker instead: RUN wget -qO- https://get.docker.com | sh
 # Install docker client
-RUN curl -sSL -o docker-${DOCKER_VERSION}.tgz https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz && \
-    tar --strip-components 1 -xvzf docker-${DOCKER_VERSION}.tgz -C /usr/bin docker/docker && \
-    tar --strip-components 1 -xvzf docker-${DOCKER_VERSION}.tgz -C /usr/bin docker/docker-runc && \
-    rm -f docker-${DOCKER_VERSION}.tgz && \
-    chmod +x /usr/bin/docker && \
-    chmod +x /usr/bin/docker-runc
+#RUN curl -sSL -o docker-${DOCKER_VERSION}.tgz https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz && \
+#    tar --strip-components 1 -xvzf docker-${DOCKER_VERSION}.tgz -C /usr/bin docker/docker && \
+#    tar --strip-components 1 -xvzf docker-${DOCKER_VERSION}.tgz -C /usr/bin docker/docker-runc && \
+#    rm -f docker-${DOCKER_VERSION}.tgz && \
+#    chmod +x /usr/bin/docker && \
+#    chmod +x /usr/bin/docker-runc
 
 ADD build/distributions/invoker.tar ./
 

@@ -38,6 +38,7 @@ import org.apache.openwhisk.core.etcd.EtcdKV.QueueKeys.queue
 import org.apache.openwhisk.core.etcd.EtcdKV.{ContainerKeys, SchedulerKeys}
 import org.apache.openwhisk.core.etcd.EtcdType._
 import org.apache.openwhisk.core.etcd.{EtcdClient, EtcdConfig}
+import org.apache.openwhisk.core.image.ImageGCManager
 import org.apache.openwhisk.core.invoker.Invoker.InvokerEnabled
 import org.apache.openwhisk.core.scheduler.{SchedulerEndpoints, SchedulerStates}
 import org.apache.openwhisk.core.service.{DataManagementService, EtcdWorker, LeaseKeepAliveService, WatcherService}
@@ -47,6 +48,7 @@ import org.apache.openwhisk.spi.SpiLoader
 import pureconfig._
 import pureconfig.generic.auto._
 
+import scala.language.postfixOps
 import scala.collection.JavaConverters._
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration._
@@ -338,10 +340,32 @@ class FPCInvokerReactive(config: WhiskConfig,
     }.toList
   }
 
+  // send to scheduler
+  private def sendGCMsgToScheduler(schedulerInstanceId: SchedulerInstanceId, invokerGCMessage: InvokerGCMessage): Unit = {
+    val topic = s"${Invoker.topicPrefix}invokerGCImage${schedulerInstanceId.asString}"
+
+    producer.send(topic, invokerGCMessage).andThen {
+      case Success(_) =>
+        logging.info(
+          this,
+          s"Posted GC message successful: ${invokerGCMessage.actionName}, ${invokerGCMessage.kind}, ${invokerGCMessage.invokerIP}")
+      case Failure(t) =>
+        logging.error(
+          this,
+          s"failed to send GC message: ${invokerGCMessage.actionName}, ${invokerGCMessage.kind}, ${invokerGCMessage.invokerIP}")
+    }
+  }
+  // image gc
+  private val gcManager =  new ImageGCManager(instance,sendGCMsgToScheduler)
+
+  // scheduler gc
+
+  actorSystem.scheduler.scheduleWithFixedDelay(0 seconds, 300 seconds) (gcManager)
+
   private val pool =
     actorSystem.actorOf(
       ContainerPoolV2
-        .props(childFactory, invokerHealthManager, poolConfig, instance, prewarmingConfigs, sendAckToScheduler))
+        .props(childFactory, invokerHealthManager, poolConfig, instance, prewarmingConfigs, sendAckToScheduler, gcManager))
 
   private def getLiveContainerCount(invocationNamespace: String,
                                     fqn: FullyQualifiedEntityName,

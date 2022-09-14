@@ -24,6 +24,7 @@ import akka.actor.ActorSystem
 import akka.stream._
 import akka.stream.scaladsl.Framing.FramingException
 import spray.json._
+
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
 import org.apache.openwhisk.common.Logging
@@ -107,13 +108,7 @@ object DockerContainer {
     val imageToUse = image.merge.resolveImageName(Some(registryConfigUrl))
 
     val pulled = image match {
-      case Left(userProvided) if userProvided.tag.map(_ == "latest").getOrElse(true) =>
-        // Iff the image tag is "latest" explicitly (or implicitly because no tag is given at all), failing to pull will
-        // fail the whole container bringup process, because it is expected to pick up the very latest "untagged"
-        // version every time.
-        docker.pull(imageToUse).map(_ => true).recoverWith {
-          case _ => Future.failed(BlackboxStartupError(Messages.imagePullError(imageToUse)))
-        }
+      //case Left(userProvided) if userProvided.tag.map(_ == "latest").getOrElse(true) =>
       case Left(_) =>
         // Iff the image tag is something else than latest, we tolerate an outdated image if one is available locally.
         // A `docker run` will be tried nonetheless to try to start a container (which will succeed if the image is

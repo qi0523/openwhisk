@@ -19,8 +19,8 @@ package org.apache.openwhisk.core.containerpool.v2
 
 import java.util.concurrent.atomic.AtomicInteger
 import akka.actor.{Actor, ActorRef, ActorRefFactory, Cancellable, Props}
-
 import org.apache.openwhisk.common._
+import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.connector.ContainerCreationError._
 import org.apache.openwhisk.core.connector.{
   ContainerCreationAckMessage,
@@ -40,6 +40,7 @@ import org.apache.openwhisk.core.containerpool.{
 }
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
+import org.apache.openwhisk.core.image.ImageGCManager
 import org.apache.openwhisk.http.Messages
 
 import scala.annotation.tailrec
@@ -81,7 +82,8 @@ class FunctionPullingContainerPool(
   poolConfig: ContainerPoolConfig,
   instance: InvokerInstanceId,
   prewarmConfig: List[PrewarmingConfig] = List.empty,
-  sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[ResultMetadata])(
+  sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[ResultMetadata],
+  gcManager: ImageGCManager)(
   implicit val logging: Logging)
     extends Actor {
   import ContainerPoolV2.memoryConsumptionOf
@@ -214,6 +216,10 @@ class FunctionPullingContainerPool(
                 .orElse {
                   takeContainer(executable)
                 }
+            if (create.srcIP != "") {
+              executable.exec.image.registry = Some(create.srcIP + ConfigKeys.p2pPort)
+              gcManager.insertMetaData(executable.exec.image.resolveImageName(), create.rootSchedulerIndex, action)
+            }
             handleChosenContainer(create, executable, createdContainer)
           case None =>
             val message =
@@ -680,9 +686,9 @@ class FunctionPullingContainerPool(
       case Some(((proxy, data), containerState)) =>
         // record creationMessage so when container created failed, we can send failed message to scheduler
         creationMessages.getOrElseUpdate(proxy, create)
-        proxy ! Initialize(create.invocationNamespace, executable, create.schedulerHost, create.rpcPort, create.transid)
+        proxy ! Initialize(create.invocationNamespace, executable, create.schedulerHost, create.rpcPort, create.transid) //这是更新的最后机会
         inProgressPool = inProgressPool + (proxy -> data)
-        logContainerStart(create, executable.toWhiskAction, containerState)
+        logContainerStart(create, executable.toWhiskAction, containerState) // logs
 
       case None =>
         val message =
@@ -869,7 +875,8 @@ object ContainerPoolV2 {
             poolConfig: ContainerPoolConfig,
             instance: InvokerInstanceId,
             prewarmConfig: List[PrewarmingConfig] = List.empty,
-            sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[ResultMetadata])(
+            sendAckToScheduler: (SchedulerInstanceId, ContainerCreationAckMessage) => Future[ResultMetadata],
+            gcManager: ImageGCManager)(
     implicit logging: Logging): Props = {
     Props(
       new FunctionPullingContainerPool(
@@ -878,6 +885,7 @@ object ContainerPoolV2 {
         poolConfig,
         instance,
         prewarmConfig,
-        sendAckToScheduler))
+        sendAckToScheduler,
+        gcManager))
   }
 }

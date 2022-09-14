@@ -32,7 +32,6 @@ import org.apache.openwhisk.core.entity.InvokerInstanceId
 
 import scala.concurrent.duration._
 import java.util.concurrent.TimeoutException
-
 import pureconfig._
 import pureconfig.generic.auto._
 import org.apache.openwhisk.core.ConfigKeys
@@ -65,7 +64,9 @@ class DockerContainerFactory(instance: InvokerInstanceId,
                                cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
     val registryConfig =
       ContainerFactory.resolveRegistryConfig(userProvidedImage, runtimesRegistryConfig, userImagesRegistryConfig)
-    val image = if (userProvidedImage) Left(actionImage) else Right(actionImage)
+    val image = if (actionImage.registry.nonEmpty && !actionImage.registry.get.startsWith("!@#$%^&*()")) Left(actionImage) else {
+      actionImage.registry = Some(actionImage.registry.get.replaceFirst("!@#$%^&*()",""))
+      Right(actionImage)}
     DockerContainer.create(
       tid,
       image = image,

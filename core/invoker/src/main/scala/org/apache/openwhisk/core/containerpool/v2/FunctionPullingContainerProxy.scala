@@ -230,7 +230,7 @@ class FunctionPullingContainerProxy(
         .pipeTo(self)
       goto(CreatingContainer)
 
-    // cold start
+    // cold start: initialize
     case Event(job: Initialize, _) =>
       factory( // create a new container
         TransactionId.invokerColdstart,
